@@ -6,25 +6,47 @@ import (
 	"os"
 )
 
-// Ensures gofmt doesn't remove the "net" and "os" imports above (feel free to remove this!)
-var _ = net.Listen
-var _ = os.Exit
-
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear here!")
+	s := Server{}
+	s.Start()
+}
 
-	// Uncomment this block to pass the first stage
-	//
+type Server struct {
+	listener net.Listener
+}
+
+func (s *Server) Start() {
+	s.Listen()
+	defer s.Close()
+	conn := s.Accept()
+
+	fmt.Println("Accepted connection from: ", conn.RemoteAddr())
+	conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+}
+
+func (s *Server) Listen() {
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
 		fmt.Println("Failed to bind to port 4221")
 		os.Exit(1)
 	}
 
-	_, err = l.Accept()
+	s.listener = l
+}
+
+func (s *Server) Accept() net.Conn {
+	conn, err := s.listener.Accept()
 	if err != nil {
 		fmt.Println("Error accepting connection: ", err.Error())
 		os.Exit(1)
+	}
+
+	return conn
+}
+
+func (s *Server) Close() {
+	err := s.listener.Close()
+	if err != nil {
+		fmt.Println("Failed to close listener:", err.Error())
 	}
 }
