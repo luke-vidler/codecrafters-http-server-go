@@ -23,9 +23,14 @@ func (s *Server) Start() {
 	defer s.Close()
 	fmt.Println("listening on 0.0.0.0:4221")
 
-	// Serve one connection (enough for early stages).
-	// Switch to a loop + goroutines later.
-	conn := s.Accept()
+	// Handle multiple concurrent connections
+	for {
+		conn := s.Accept()
+		go s.handleConnection(conn)
+	}
+}
+
+func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
