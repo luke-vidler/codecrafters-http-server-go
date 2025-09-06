@@ -30,7 +30,7 @@ func (s *Server) Start() {
 
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	path, err := readRequestAndGetPath(conn)
+	path, headers, err := readRequestAndGetPathAndHeaders(conn)
 	if err != nil {
 		// Malformed request → 400
 		resp := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -56,6 +56,14 @@ func (s *Server) Start() {
 			len(str), str,
 		)
 		_, _ = conn.Write([]byte(resp))
+	} else if path == "/user-agent" {
+		// Handle /user-agent endpoint
+		userAgent := headers["User-Agent"]
+		resp := fmt.Sprintf(
+			"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+			len(userAgent), userAgent,
+		)
+		_, _ = conn.Write([]byte(resp))
 	} else {
 		// Return 404 for any other path
 		resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -63,36 +71,45 @@ func (s *Server) Start() {
 	}
 }
 
-func readRequestAndGetPath(conn net.Conn) (string, error) {
+func readRequestAndGetPathAndHeaders(conn net.Conn) (string, map[string]string, error) {
 	r := bufio.NewReader(conn)
 
 	// Request line: METHOD SP PATH SP VERSION CRLF
 	reqLine, err := r.ReadString('\n')
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	reqLine = strings.TrimRight(reqLine, "\r\n")
 	parts := strings.Fields(reqLine)
 	if len(parts) != 3 {
-		return "", fmt.Errorf("bad request line")
+		return "", nil, fmt.Errorf("bad request line")
 	}
 	method, path, version := parts[0], parts[1], parts[2]
 	if !strings.HasPrefix(version, "HTTP/") {
-		return "", fmt.Errorf("not http")
+		return "", nil, fmt.Errorf("not http")
 	}
 	_ = method // not used yet, but parsed for future stages
 
-	// Read & discard headers until blank line
+	// Read headers until blank line
+	headers := make(map[string]string)
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if line == "\r\n" { // end of headers
 			break
 		}
+		// Parse header: Name: Value
+		line = strings.TrimRight(line, "\r\n")
+		colonIndex := strings.Index(line, ":")
+		if colonIndex > 0 {
+			name := strings.TrimSpace(line[:colonIndex])
+			value := strings.TrimSpace(line[colonIndex+1:])
+			headers[name] = value
+		}
 	}
-	return path, nil
+	return path, headers, nil
 }
 
 func (s *Server) Listen() {
