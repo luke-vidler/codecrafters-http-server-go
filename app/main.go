@@ -49,94 +49,103 @@ func (s *Server) Start() {
 func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	for {
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	method, path, headers, reader, err := readRequestAndGetMethodPathAndHeaders(conn)
-	if err != nil {
-		// Malformed request → 400
-		resp := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-		_, _ = conn.Write([]byte(resp))
-		return
-	}
-	fmt.Println("Accepted path:", path)
+		method, path, headers, reader, err := readRequestAndGetMethodPathAndHeaders(conn)
+		if err != nil {
+			// Connection closed or malformed request, exit loop
+			return
+		}
+		fmt.Println("Accepted path:", path)
 
-	// Handle different paths
-	if path == "/" {
-		// Minimal valid HTTP response for root path
-		body := "OK\n"
-		resp := fmt.Sprintf(
-			"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n%s",
-			len(body), body,
-		)
-		_, _ = conn.Write([]byte(resp))
-	} else if strings.HasPrefix(path, "/echo/") {
-		// Handle /echo/{str} endpoint
-		str := strings.TrimPrefix(path, "/echo/")
+		// Check if client wants to close connection
+		connectionHeader := headers["Connection"]
+		shouldClose := strings.ToLower(connectionHeader) == "close"
 
-		// Check if client supports gzip compression
-		acceptEncoding := headers["Accept-Encoding"]
-		supportsGzip := strings.Contains(acceptEncoding, "gzip")
-
-		if supportsGzip {
-			// Client supports gzip, compress the response body
-			var buf bytes.Buffer
-			gzipWriter := gzip.NewWriter(&buf)
-			_, err := gzipWriter.Write([]byte(str))
-			if err != nil {
-				resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
-				_, _ = conn.Write([]byte(resp))
-				return
-			}
-			err = gzipWriter.Close()
-			if err != nil {
-				resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
-				_, _ = conn.Write([]byte(resp))
-				return
-			}
-
-			compressedData := buf.Bytes()
-
-			// Send response headers
-			respHeader := fmt.Sprintf(
-				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n",
-				len(compressedData),
+		// Handle different paths
+		if path == "/" {
+			// Minimal valid HTTP response for root path
+			body := "OK\n"
+			resp := fmt.Sprintf(
+				"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n%s",
+				len(body), body,
 			)
-			_, _ = conn.Write([]byte(respHeader))
+			_, _ = conn.Write([]byte(resp))
+		} else if strings.HasPrefix(path, "/echo/") {
+			// Handle /echo/{str} endpoint
+			str := strings.TrimPrefix(path, "/echo/")
 
-			// Send compressed body
-			_, _ = conn.Write(compressedData)
-		} else {
-			// Client doesn't support gzip, send standard response
+			// Check if client supports gzip compression
+			acceptEncoding := headers["Accept-Encoding"]
+			supportsGzip := strings.Contains(acceptEncoding, "gzip")
+
+			if supportsGzip {
+				// Client supports gzip, compress the response body
+				var buf bytes.Buffer
+				gzipWriter := gzip.NewWriter(&buf)
+				_, err := gzipWriter.Write([]byte(str))
+				if err != nil {
+					resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+					_, _ = conn.Write([]byte(resp))
+					return
+				}
+				err = gzipWriter.Close()
+				if err != nil {
+					resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+					_, _ = conn.Write([]byte(resp))
+					return
+				}
+
+				compressedData := buf.Bytes()
+
+				// Send response headers
+				respHeader := fmt.Sprintf(
+					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n",
+					len(compressedData),
+				)
+				_, _ = conn.Write([]byte(respHeader))
+
+				// Send compressed body
+				_, _ = conn.Write(compressedData)
+			} else {
+				// Client doesn't support gzip, send standard response
+				resp := fmt.Sprintf(
+					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+					len(str), str,
+				)
+				_, _ = conn.Write([]byte(resp))
+			}
+		} else if path == "/user-agent" {
+			// Handle /user-agent endpoint
+			userAgent := headers["User-Agent"]
 			resp := fmt.Sprintf(
 				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-				len(str), str,
+				len(userAgent), userAgent,
 			)
 			_, _ = conn.Write([]byte(resp))
-		}
-	} else if path == "/user-agent" {
-		// Handle /user-agent endpoint
-		userAgent := headers["User-Agent"]
-		resp := fmt.Sprintf(
-			"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-			len(userAgent), userAgent,
-		)
-		_, _ = conn.Write([]byte(resp))
-	} else if strings.HasPrefix(path, "/files/") {
-		// Handle /files/{filename} endpoint
-		filename := strings.TrimPrefix(path, "/files/")
-		if method == "GET" {
-			s.handleFileGetRequest(conn, filename)
-		} else if method == "POST" {
-			s.handleFilePostRequest(conn, filename, headers, reader)
+		} else if strings.HasPrefix(path, "/files/") {
+			// Handle /files/{filename} endpoint
+			filename := strings.TrimPrefix(path, "/files/")
+			if method == "GET" {
+				s.handleFileGetRequest(conn, filename)
+			} else if method == "POST" {
+				s.handleFilePostRequest(conn, filename, headers, reader)
+			} else {
+				// Method not allowed
+				resp := "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+				_, _ = conn.Write([]byte(resp))
+			}
 		} else {
-			// Method not allowed
-			resp := "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+			// Return 404 for any other path
+			resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
 			_, _ = conn.Write([]byte(resp))
 		}
-	} else {
-		// Return 404 for any other path
-		resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-		_, _ = conn.Write([]byte(resp))
+
+		// Close connection if requested by client
+		if shouldClose {
+			return
+		}
 	}
 }
 
