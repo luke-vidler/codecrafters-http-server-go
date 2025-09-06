@@ -70,10 +70,25 @@ func (s *Server) handleConnection(conn net.Conn) {
 	} else if strings.HasPrefix(path, "/echo/") {
 		// Handle /echo/{str} endpoint
 		str := strings.TrimPrefix(path, "/echo/")
-		resp := fmt.Sprintf(
-			"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-			len(str), str,
-		)
+
+		// Check if client supports gzip compression
+		acceptEncoding := headers["Accept-Encoding"]
+		supportsGzip := strings.Contains(acceptEncoding, "gzip")
+
+		var resp string
+		if supportsGzip {
+			// Client supports gzip, include Content-Encoding header
+			resp = fmt.Sprintf(
+				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s",
+				len(str), str,
+			)
+		} else {
+			// Client doesn't support gzip, send standard response
+			resp = fmt.Sprintf(
+				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+				len(str), str,
+			)
+		}
 		_, _ = conn.Write([]byte(resp))
 	} else if path == "/user-agent" {
 		// Handle /user-agent endpoint
