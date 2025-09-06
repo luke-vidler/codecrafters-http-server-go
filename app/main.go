@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
@@ -75,21 +77,42 @@ func (s *Server) handleConnection(conn net.Conn) {
 		acceptEncoding := headers["Accept-Encoding"]
 		supportsGzip := strings.Contains(acceptEncoding, "gzip")
 
-		var resp string
 		if supportsGzip {
-			// Client supports gzip, include Content-Encoding header
-			resp = fmt.Sprintf(
-				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n%s",
-				len(str), str,
+			// Client supports gzip, compress the response body
+			var buf bytes.Buffer
+			gzipWriter := gzip.NewWriter(&buf)
+			_, err := gzipWriter.Write([]byte(str))
+			if err != nil {
+				resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+				_, _ = conn.Write([]byte(resp))
+				return
+			}
+			err = gzipWriter.Close()
+			if err != nil {
+				resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+				_, _ = conn.Write([]byte(resp))
+				return
+			}
+
+			compressedData := buf.Bytes()
+
+			// Send response headers
+			respHeader := fmt.Sprintf(
+				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n",
+				len(compressedData),
 			)
+			_, _ = conn.Write([]byte(respHeader))
+
+			// Send compressed body
+			_, _ = conn.Write(compressedData)
 		} else {
 			// Client doesn't support gzip, send standard response
-			resp = fmt.Sprintf(
+			resp := fmt.Sprintf(
 				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
 				len(str), str,
 			)
+			_, _ = conn.Write([]byte(resp))
 		}
-		_, _ = conn.Write([]byte(resp))
 	} else if path == "/user-agent" {
 		// Handle /user-agent endpoint
 		userAgent := headers["User-Agent"]
