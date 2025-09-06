@@ -63,13 +63,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 		connectionHeader := headers["Connection"]
 		shouldClose := strings.ToLower(connectionHeader) == "close"
 
+		// Prepare connection header for responses
+		var connectionResponseHeader string
+		if shouldClose {
+			connectionResponseHeader = "\r\nConnection: close"
+		}
+
 		// Handle different paths
 		if path == "/" {
 			// Minimal valid HTTP response for root path
 			body := "OK\n"
 			resp := fmt.Sprintf(
-				"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain\r\n\r\n%s",
-				len(body), body,
+				"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nContent-Type: text/plain%s\r\n\r\n%s",
+				len(body), connectionResponseHeader, body,
 			)
 			_, _ = conn.Write([]byte(resp))
 		} else if strings.HasPrefix(path, "/echo/") {
@@ -101,8 +107,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 				// Send response headers
 				respHeader := fmt.Sprintf(
-					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d\r\n\r\n",
-					len(compressedData),
+					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Encoding: gzip\r\nContent-Length: %d%s\r\n\r\n",
+					len(compressedData), connectionResponseHeader,
 				)
 				_, _ = conn.Write([]byte(respHeader))
 
@@ -111,8 +117,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 			} else {
 				// Client doesn't support gzip, send standard response
 				resp := fmt.Sprintf(
-					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-					len(str), str,
+					"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d%s\r\n\r\n%s",
+					len(str), connectionResponseHeader, str,
 				)
 				_, _ = conn.Write([]byte(resp))
 			}
@@ -120,8 +126,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 			// Handle /user-agent endpoint
 			userAgent := headers["User-Agent"]
 			resp := fmt.Sprintf(
-				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-				len(userAgent), userAgent,
+				"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d%s\r\n\r\n%s",
+				len(userAgent), connectionResponseHeader, userAgent,
 			)
 			_, _ = conn.Write([]byte(resp))
 		} else if strings.HasPrefix(path, "/files/") {
@@ -133,12 +139,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 				s.handleFilePostRequest(conn, filename, headers, reader)
 			} else {
 				// Method not allowed
-				resp := "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+				resp := fmt.Sprintf("HTTP/1.1 405 Method Not Allowed%s\r\n\r\n", connectionResponseHeader)
 				_, _ = conn.Write([]byte(resp))
 			}
 		} else {
 			// Return 404 for any other path
-			resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+			resp := fmt.Sprintf("HTTP/1.1 404 Not Found\r\nContent-Length: 0%s\r\n\r\n", connectionResponseHeader)
 			_, _ = conn.Write([]byte(resp))
 		}
 
