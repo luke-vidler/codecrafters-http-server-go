@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,7 +49,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	path, headers, err := readRequestAndGetPathAndHeaders(conn)
+	method, path, headers, reader, err := readRequestAndGetMethodPathAndHeaders(conn)
 	if err != nil {
 		// Malformed request → 400
 		resp := "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -85,7 +86,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 	} else if strings.HasPrefix(path, "/files/") {
 		// Handle /files/{filename} endpoint
 		filename := strings.TrimPrefix(path, "/files/")
-		s.handleFileRequest(conn, filename)
+		if method == "GET" {
+			s.handleFileGetRequest(conn, filename)
+		} else if method == "POST" {
+			s.handleFilePostRequest(conn, filename, headers, reader)
+		} else {
+			// Method not allowed
+			resp := "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+			_, _ = conn.Write([]byte(resp))
+		}
 	} else {
 		// Return 404 for any other path
 		resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -93,7 +102,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 }
 
-func (s *Server) handleFileRequest(conn net.Conn, filename string) {
+func (s *Server) handleFileGetRequest(conn net.Conn, filename string) {
 	if s.directory == "" {
 		// No directory specified, return 404
 		resp := "HTTP/1.1 404 Not Found\r\n\r\n"
@@ -133,31 +142,86 @@ func (s *Server) handleFileRequest(conn net.Conn, filename string) {
 	_, _ = io.Copy(conn, file)
 }
 
-func readRequestAndGetPathAndHeaders(conn net.Conn) (string, map[string]string, error) {
+func (s *Server) handleFilePostRequest(conn net.Conn, filename string, headers map[string]string, reader *bufio.Reader) {
+	if s.directory == "" {
+		// No directory specified, return 404
+		resp := "HTTP/1.1 404 Not Found\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Get content length
+	contentLengthStr, ok := headers["Content-Length"]
+	if !ok {
+		resp := "HTTP/1.1 400 Bad Request\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	contentLength, err := strconv.Atoi(contentLengthStr)
+	if err != nil || contentLength < 0 {
+		resp := "HTTP/1.1 400 Bad Request\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Read request body
+	body := make([]byte, contentLength)
+	_, err = io.ReadFull(reader, body)
+	if err != nil {
+		resp := "HTTP/1.1 400 Bad Request\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Create file path
+	filePath := filepath.Join(s.directory, filename)
+
+	// Create and write file
+	file, err := os.Create(filePath)
+	if err != nil {
+		resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+	defer file.Close()
+
+	_, err = file.Write(body)
+	if err != nil {
+		resp := "HTTP/1.1 500 Internal Server Error\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Return 201 Created
+	resp := "HTTP/1.1 201 Created\r\n\r\n"
+	_, _ = conn.Write([]byte(resp))
+}
+
+func readRequestAndGetMethodPathAndHeaders(conn net.Conn) (string, string, map[string]string, *bufio.Reader, error) {
 	r := bufio.NewReader(conn)
 
 	// Request line: METHOD SP PATH SP VERSION CRLF
 	reqLine, err := r.ReadString('\n')
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, nil, err
 	}
 	reqLine = strings.TrimRight(reqLine, "\r\n")
 	parts := strings.Fields(reqLine)
 	if len(parts) != 3 {
-		return "", nil, fmt.Errorf("bad request line")
+		return "", "", nil, nil, fmt.Errorf("bad request line")
 	}
 	method, path, version := parts[0], parts[1], parts[2]
 	if !strings.HasPrefix(version, "HTTP/") {
-		return "", nil, fmt.Errorf("not http")
+		return "", "", nil, nil, fmt.Errorf("not http")
 	}
-	_ = method // not used yet, but parsed for future stages
 
 	// Read headers until blank line
 	headers := make(map[string]string)
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return "", nil, err
+			return "", "", nil, nil, err
 		}
 		if line == "\r\n" { // end of headers
 			break
@@ -171,7 +235,7 @@ func readRequestAndGetPathAndHeaders(conn net.Conn) (string, map[string]string, 
 			headers[name] = value
 		}
 	}
-	return path, headers, nil
+	return method, path, headers, r, nil
 }
 
 func (s *Server) Listen() {
