@@ -48,6 +48,14 @@ func (s *Server) Start() {
 			len(body), body,
 		)
 		_, _ = conn.Write([]byte(resp))
+	} else if strings.HasPrefix(path, "/echo/") {
+		// Handle /echo/{str} endpoint
+		str := strings.TrimPrefix(path, "/echo/")
+		resp := fmt.Sprintf(
+			"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+			len(str), str,
+		)
+		_, _ = conn.Write([]byte(resp))
 	} else {
 		// Return 404 for any other path
 		resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
