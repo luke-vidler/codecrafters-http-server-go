@@ -3,19 +3,32 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 func main() {
-	s := Server{}
+	var directory string
+
+	// Parse command line arguments
+	for i, arg := range os.Args {
+		if arg == "--directory" && i+1 < len(os.Args) {
+			directory = os.Args[i+1]
+			break
+		}
+	}
+
+	s := Server{directory: directory}
 	s.Start()
 }
 
 type Server struct {
-	listener net.Listener
+	listener  net.Listener
+	directory string
 }
 
 func (s *Server) Start() {
@@ -69,11 +82,55 @@ func (s *Server) handleConnection(conn net.Conn) {
 			len(userAgent), userAgent,
 		)
 		_, _ = conn.Write([]byte(resp))
+	} else if strings.HasPrefix(path, "/files/") {
+		// Handle /files/{filename} endpoint
+		filename := strings.TrimPrefix(path, "/files/")
+		s.handleFileRequest(conn, filename)
 	} else {
 		// Return 404 for any other path
 		resp := "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 		_, _ = conn.Write([]byte(resp))
 	}
+}
+
+func (s *Server) handleFileRequest(conn net.Conn, filename string) {
+	if s.directory == "" {
+		// No directory specified, return 404
+		resp := "HTTP/1.1 404 Not Found\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Construct full file path
+	filePath := filepath.Join(s.directory, filename)
+
+	// Check if file exists and read it
+	file, err := os.Open(filePath)
+	if err != nil {
+		// File doesn't exist or can't be opened, return 404
+		resp := "HTTP/1.1 404 Not Found\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+	defer file.Close()
+
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		resp := "HTTP/1.1 404 Not Found\r\n\r\n"
+		_, _ = conn.Write([]byte(resp))
+		return
+	}
+
+	// Send response headers
+	resp := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n",
+		fileInfo.Size(),
+	)
+	_, _ = conn.Write([]byte(resp))
+
+	// Send file contents
+	_, _ = io.Copy(conn, file)
 }
 
 func readRequestAndGetPathAndHeaders(conn net.Conn) (string, map[string]string, error) {
